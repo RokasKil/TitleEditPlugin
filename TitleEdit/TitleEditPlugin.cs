@@ -1,4 +1,12 @@
-﻿using System;
+﻿using Dalamud.Game.Command;
+using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using ImGuiNET;
+using Lumina.Excel.GeneratedSheets;
+using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -6,13 +14,6 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
-using Dalamud.Game.Command;
-using Dalamud.Plugin;
-using Dalamud.Plugin.Services;
-using ImGuiNET;
-using Lumina.Excel.GeneratedSheets;
-using Newtonsoft.Json;
-using SharpDX;
 using Formatting = Newtonsoft.Json.Formatting;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
@@ -25,8 +26,6 @@ namespace TitleEdit
         public string Name => "Title Edit";
 
         public const string TitleEditCommand = "/titleedit";
-        private const int LookAtOffset = 192;
-        private const int EyesPosOffset = 144;
 
         private TitleEditConfiguration _configuration;
         private BgmSheetManager _bgmSheet;
@@ -36,8 +35,8 @@ namespace TitleEdit
         private string _titleScreenFolder;
         private string[] _titleScreens;
         private string[] _titleScreensExport;
-        private readonly string[] _titleLogos = {"A Realm Reborn", "FFXIV Free Trial", "Heavensward", "Stormblood", "Shadowbringers", "Endwalker"};
-        private readonly string[] _titleLogosCreate = {"A Realm Reborn", "FFXIV Free Trial", "Heavensward", "Stormblood", "Shadowbringers", "Endwalker", "Unspecified"};
+        private readonly string[] _titleLogos = { "A Realm Reborn", "FFXIV Free Trial", "Heavensward", "Stormblood", "Shadowbringers", "Endwalker", "Dawntrail" };
+        private readonly string[] _titleLogosCreate = { "A Realm Reborn", "FFXIV Free Trial", "Heavensward", "Stormblood", "Shadowbringers", "Endwalker", "Dawntrail", "Unspecified" };
         private bool _canChangeUiVisibility = true;
         private bool _isImguiTitleEditOpen;
         private int _selectedTitleIndex;
@@ -61,7 +60,7 @@ namespace TitleEdit
         private bool _nameAlreadyExists;
         private bool _nameEmpty = true;
         private string _titleScreenSavePath = "";
-        private int _selectedLogoIndexCreate = 5;
+        private int _selectedLogoIndexCreate = 6;
         private bool _selectedLogoVisibleCreate = true;
         private string _customTsName = "";
         private float _fovY = 1f;
@@ -72,37 +71,35 @@ namespace TitleEdit
         private int _tsTimeMin;
         private int _tsTimeOffset;
         private int _selectedBgmId;
-        private string _terriPath = "";
         private ushort _lastBgmId;
         private string _songDescription = ""; // This is global so we don't have to do text size calc every frame
+        private IDalamudTextureWrap logoTexture;
 
         private Dictionary<uint, TerritoryType> _territoryPaths;
         private Dictionary<uint, string> _weathers;
 
-        public TitleEditPlugin(DalamudPluginInterface pi)
+        public TitleEditPlugin(IDalamudPluginInterface pi)
         {
             DalamudApi.Initialize(pi);
             DalamudApi.PluginLog.Info("===== T I T L E E D I T =====");
 
             // Load menu_icon.png from dll resources
-            var assembly = Assembly.GetExecutingAssembly();
-            var resourceStream = assembly.GetManifestResourceStream("TitleEdit.menu_icon.png");
-            if (resourceStream != null)
+            pi.UiBuilder.RunWhenUiPrepared(() =>
             {
-                var imageBytes = new byte[resourceStream.Length];
-                resourceStream.Read(imageBytes, 0, (int) resourceStream.Length);
-                DalamudApi.PluginLog.Information($"image is {imageBytes.Length} bytes");
-                try
+                var image = DalamudApi.TextureProvider.GetFromManifestResource(Assembly.GetExecutingAssembly(), "TitleEdit.menu_icon.png");
+                return image.RentAsync();
+            }).ContinueWith(imageTask =>
+            {
+                if (!imageTask.IsFaulted)
                 {
-                    var image = DalamudApi.PluginInterface.UiBuilder.LoadImage(imageBytes);
-                    DalamudApi.TitleScreenMenu.AddEntry("Title Edit Menu", image, () => { _isImguiTitleEditOpen = true; });
+                    logoTexture = imageTask.Result;
+                    DalamudApi.Framework.RunOnFrameworkThread(() =>
+                    {
+                        DalamudApi.TitleScreenMenu.AddEntry("Title Edit Menu", logoTexture, () => { _isImguiTitleEditOpen = true; });
+                    });
                 }
-                catch (Exception e)
-                {
-                    DalamudApi.PluginLog.Error(e, "Title Edit encountered an error loading menu icon");
-                }
-            }           
-            
+            });
+
             DalamudApi.CommandManager.AddHandler(TitleEditCommand, new CommandInfo(OnTitleEditCommand)
             {
                 HelpMessage = "Display the Title Edit configuration interface."
@@ -122,7 +119,7 @@ namespace TitleEdit
             _weathers = DalamudApi.DataManager.GetExcelSheet<Weather>()!
                 .ToDictionary(row => row.RowId, row => row.Name.ToString());
             _bgmSheet = new BgmSheetManager();
-            
+
             _titleEdit = new TitleEdit(_configuration, _titleScreenFolder);
             _titleEdit.Enable();
 
@@ -131,7 +128,7 @@ namespace TitleEdit
             DalamudApi.PluginInterface.UiBuilder.OpenConfigUi += () => _isImguiTitleEditOpen = true;
             DalamudApi.PluginLog.Info("Init complete.");
         }
-        
+
         private void PrepareAssets()
         {
             var temp = Path.Combine(Path.GetDirectoryName(DalamudApi.PluginInterface.AssemblyLocation.FullName), "titlescreens");
@@ -219,6 +216,9 @@ namespace TitleEdit
             ImGui.SetNextWindowSize(new Vector2(GuiScale(480), GuiScale(530)));
             ImGui.Begin("Title Editing", ref _isImguiTitleEditOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
             ImGui.BeginTabBar("TitleEditMainTabBar");
+#if DEBUG
+            DrawDebug();
+#endif
             DrawCreation();
             DrawManage();
             DrawSettings();
@@ -230,6 +230,16 @@ namespace TitleEdit
 
             ImGui.Spacing();
             ImGui.End();
+        }
+
+        private unsafe void DrawDebug()
+        {
+            if (!ImGui.BeginTabItem("Debug"))
+                return;
+            ImGui.Text($" {TitleEditAddressResolver.LobbyThing:X}");
+            ImGui.Text($" {(IntPtr)AgentLobby.Instance():X} {AgentLobby.Instance()->LobbyUIStage} {AgentLobby.Instance()->LobbyUpdateStage}");
+            ImGui.Text($" {(IntPtr)TitleEditAddressResolver.WeatherPtr:X}");
+            ImGui.EndTabItem();
         }
 
         private void DrawCreation()
@@ -245,7 +255,7 @@ namespace TitleEdit
             ImGui.BeginChild("scrolling", new Vector2(0, GuiScale(400)), true, ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoScrollbar);
 #endif
             bool stateInvalid;
-            var selectedBgm = new BgmInfo {Title = "Unknown", FilePath = ""};
+            var selectedBgm = new BgmInfo { Title = "Unknown", FilePath = "" };
             Vector3 eyesPos = default;
             Vector3 lookAt = default;
 #if !DEBUG
@@ -280,7 +290,7 @@ namespace TitleEdit
                 }
 
                 stateInvalid = _nameAlreadyExists | _nameContainsInvalidCharacters | _nameEmpty;
-                
+
                 ImGui.Text("Logo setting:");
                 ImGui.SameLine();
                 if (_titleLogosCreate[_selectedLogoIndexCreate] != "Unspecified")
@@ -320,7 +330,7 @@ namespace TitleEdit
                 }
 #endif
 
-                eyesPos = EyesPos(DalamudApi.ClientState.LocalPlayer?.Position ?? new Vector3{X = 0, Y = 0, Z = 0});
+                eyesPos = EyesPos(DalamudApi.ClientState.LocalPlayer?.Position ?? new Vector3 { X = 0, Y = 0, Z = 0 });
                 ImGui.Text($"Camera position: {eyesPos.X:F2}, {eyesPos.Y:F2}, {eyesPos.Z:F2}");
 
                 lookAt = LookAt(new Vector3(eyesPos.X, eyesPos.Y, eyesPos.Z));
@@ -333,7 +343,7 @@ namespace TitleEdit
                 ImGui.SameLine();
                 if (ImGui.Button("Reset##resetFovY"))
                     _fovY = 1f;
-                
+
                 // Weather
                 var newType = DalamudApi.ClientState.TerritoryType;
                 if (newType != _lastTerritoryId)
@@ -341,7 +351,7 @@ namespace TitleEdit
                     _lastTerritoryId = newType;
                     UpdateWeathers(newType);
                 }
-                
+
                 byte currentWeather = _titleEdit.GetWeather();
                 ImGui.Text($"Current weather: {GetWeatherDescriptor(currentWeather)}");
                 ImGui.SameLine();
@@ -357,7 +367,7 @@ namespace TitleEdit
                             if (_territoryWeathers[i] != _weatherId) continue;
                             _selectedWeatherIndex = i;
                             break;
-                        }    
+                        }
                     }
                 }
                 ImGui.Text("Title zone weather:");
@@ -389,7 +399,7 @@ namespace TitleEdit
                 }
 #endif
 
-                if (_weatherId < 1 || _weatherId > 255 || !_weathers.ContainsKey((uint) _inputIntWeatherId))
+                if (_weatherId < 1 || _weatherId > 255 || !_weathers.ContainsKey((uint)_inputIntWeatherId))
                 {
                     ImGui.SameLine();
                     ImGui.TextColored(new Vector4(1f, 0f, 0f, 1f), "(invalid)");
@@ -398,7 +408,7 @@ namespace TitleEdit
                 else if (_territoryWeathers == null || _territoryWeathers.Length == 0)
                 {
                     ImGui.SameLine();
-                    ImGui.Text(GetWeatherDescriptor((ushort) _weatherId));
+                    ImGui.Text(GetWeatherDescriptor((ushort)_weatherId));
                 }
 
                 // Music
@@ -424,7 +434,7 @@ namespace TitleEdit
                 ImGui.SameLine();
                 ImGui.SetNextItemWidth(GuiScale(150f));
                 ImGui.InputInt("##customTSmusic", ref _selectedBgmId);
-                selectedBgm = _bgmSheet.GetBgmInfo((ushort) _selectedBgmId);
+                selectedBgm = _bgmSheet.GetBgmInfo((ushort)_selectedBgmId);
                 if (ImGui.IsItemHovered())
                     DrawBgmTooltip(selectedBgm);
                 ImGui.SameLine();
@@ -442,7 +452,7 @@ namespace TitleEdit
                 long etS = 0;
                 unsafe
                 {
-                    etS = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework.Instance()->EorzeaTime;    
+                    etS = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework.Instance()->ClientTime.EorzeaTime;
                 }
                 var et = DateTimeOffset.FromUnixTimeSeconds(etS);
                 ImGui.Text($"Current time: {et.Hour:D2}:{et.Minute:D2}");
@@ -453,7 +463,7 @@ namespace TitleEdit
                     _tsTimeHrs = et.Hour;
                     _tsTimeMin = et.Minute;
                     var scaled = _tsTimeMin / 60f * 100;
-                    _tsTimeOffset = (int) (_tsTimeHrs * 100 + scaled % 100);
+                    _tsTimeOffset = (int)(_tsTimeHrs * 100 + scaled % 100);
                 }
                 ImGui.Text("Time:");
                 ImGui.SameLine();
@@ -462,14 +472,14 @@ namespace TitleEdit
                 if (ImGui.InputInt("hrs", ref _tsTimeHrs, 0, 23))
                 {
                     var scaled = _tsTimeMin / 60f * 100;
-                    _tsTimeOffset = (int) (_tsTimeHrs * 100 + scaled % 100);
+                    _tsTimeOffset = (int)(_tsTimeHrs * 100 + scaled % 100);
                 }
                 ImGui.SameLine();
                 ImGui.SetNextItemWidth(timeWidth);
                 if (ImGui.InputInt("mins", ref _tsTimeMin, 0, 59))
                 {
                     var scaled = _tsTimeMin / 60f * 100;
-                    _tsTimeOffset = (int) (_tsTimeHrs * 100 + scaled % 100);
+                    _tsTimeOffset = (int)(_tsTimeHrs * 100 + scaled % 100);
                 }
             }
 
@@ -517,8 +527,8 @@ namespace TitleEdit
                 scr.CameraPos = eyesPos;
                 scr.FixOnPos = lookAt;
                 scr.FovY = _fovY;
-                scr.WeatherId = (byte) _weatherId;
-                scr.TimeOffset = (ushort) _tsTimeOffset;
+                scr.WeatherId = (byte)_weatherId;
+                scr.TimeOffset = (ushort)_tsTimeOffset;
                 scr.BgmPath = selectedBgm.FilePath;
                 var text = JsonConvert.SerializeObject(scr, Formatting.Indented);
                 bool createSuccess = false;
@@ -526,6 +536,7 @@ namespace TitleEdit
                 {
                     File.WriteAllText(_titleScreenSavePath, text);
                     EnumerateTitleScreenFiles();
+                    CalcScreenNameWidth(true);
                     createSuccess = true;
                 }
                 catch (Exception e)
@@ -619,6 +630,7 @@ namespace TitleEdit
                                 File.WriteAllText(fileName, toImport);
                                 _importName = screen.Name;
                                 EnumerateTitleScreenFiles();
+                                CalcScreenNameWidth(true);
                                 Task.Delay(2000).ContinueWith(_ => _importName = "");
                             }
                             else
@@ -678,16 +690,8 @@ namespace TitleEdit
                     ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Failed to import {_importError}. Please check the log!");
             }
 
-            if (_widestScreenName == 0)
-            {
-                foreach (var title in _titleScreens)
-                {
-                    var size = ImGui.CalcTextSize(title).X;
-                    if (size > _widestScreenName)
-                        _widestScreenName = size;
-                }
-            }
-            
+            CalcScreenNameWidth();
+
             if (ImGui.CollapsingHeader("Installed Screens"))
             {
                 var width = GuiScale(_widestScreenName + 100);
@@ -715,7 +719,7 @@ namespace TitleEdit
                 ImGui.EndChild();
                 ImGui.SameLine();
                 if (ImGui.Button("Open presets folder"))
-                    Process.Start(new ProcessStartInfo(_titleScreenFolder) {UseShellExecute = true});
+                    Process.Start(new ProcessStartInfo(_titleScreenFolder) { UseShellExecute = true });
             }
 
             ImGui.EndChild();
@@ -729,40 +733,34 @@ namespace TitleEdit
 
         private Vector3 LookAt(Vector3 playerPos)
         {
-            var viewMatrix = new Matrix();
-            var playerPosSdx = new SharpDX.Vector3(playerPos.X, playerPos.Y, playerPos.Z);
-            
-            var renderCam = TitleEditAddressResolver.RenderCamera;
-            if (renderCam != IntPtr.Zero)
+            var lookAt = playerPos;
+
+            unsafe
             {
-                unsafe
+                var renderCam = TitleEditAddressResolver.RenderCamera;
+                if (renderCam != null)
                 {
-                    var rawMatrix = (float*) (renderCam + LookAtOffset).ToPointer();
-                    for (var i = 0; i < 16; i++, rawMatrix++)
-                        viewMatrix[i] = *rawMatrix;
+                    // keeping the old functionality where the vector was multiplied by 10
+                    lookAt = renderCam->SceneCamera.Position + (renderCam->SceneCamera.LookAtVector - renderCam->SceneCamera.Position) * 10;
                 }
             }
 
-            var result = playerPosSdx + viewMatrix.Left * 10f;
-            return new Vector3(result.X, result.Y, result.Z);
+            return lookAt;
         }
 
         private Vector3 EyesPos(Vector3 playerPos)
         {
             var ret = playerPos;
 
-            var renderCam = TitleEditAddressResolver.RenderCamera;
-            if (renderCam != IntPtr.Zero)
+            unsafe
             {
-                unsafe
+                var renderCam = TitleEditAddressResolver.RenderCamera;
+                if (renderCam != null)
                 {
-                    var rawVector = (float*) (renderCam + EyesPosOffset).ToPointer();
-                    ret.X = rawVector[0];
-                    ret.Y = rawVector[1];
-                    ret.Z = rawVector[2];
-                }    
+                    ret = renderCam->SceneCamera.Position;
+                }
             }
-            
+
             return ret;
         }
 
@@ -784,7 +782,7 @@ namespace TitleEdit
                 if (_territoryWeathers.Length > 0)
                 {
                     _selectedWeatherIndex = 0;
-                    _weatherId = _territoryWeathers[0];    
+                    _weatherId = _territoryWeathers[0];
                 }
             }
             catch (Exception e)
@@ -816,15 +814,30 @@ namespace TitleEdit
             return _weathers.TryGetValue(weather, out string weatherName) ? $"({weather}) {weatherName}" : $"({weather})";
         }
 
+        private void CalcScreenNameWidth(bool force = false)
+        {
+            if (_widestScreenName == 0 || force)
+            {
+                foreach (var title in _titleScreens)
+                {
+                    var size = ImGui.CalcTextSize(title).X;
+                    if (size > _widestScreenName)
+                        _widestScreenName = size;
+                }
+            }
+        }
+
         private void DrawSettings()
         {
             if (!ImGui.BeginTabItem("Settings"))
                 return;
 
+            CalcScreenNameWidth();
+
             bool canSave = true;
             ImGui.Text("This window allows you to change what title screen plays when you start the game.");
             ImGui.BeginChild("scrolling", new Vector2(0, GuiScale(421)), true);
-            
+
             ImGui.Combo("Title screen file to use", ref _selectedTitleIndex, _titleScreens, _titleScreens.Length);
             if (_titleScreens[_selectedTitleIndex] == "Random (custom)" && _titleScreens.Length > 2)
             {
@@ -850,7 +863,7 @@ namespace TitleEdit
             }
             ImGui.Combo("Title screen logo to use", ref _selectedLogoIndex, _titleLogos, _titleLogos.Length);
 
-            if (ImGui.BeginCombo("Logo override", 
+            if (ImGui.BeginCombo("Logo override",
                 GetOverrideSettingString(_configuration.Override)))
             {
                 if (ImGui.Selectable(GetOverrideSettingString(OverrideSetting.Override)))
@@ -859,8 +872,8 @@ namespace TitleEdit
                     _configuration.Override = OverrideSetting.UseIfUnspecified;
                 ImGui.EndCombo();
             }
-            
-            if (ImGui.BeginCombo("Logo visibility override", 
+
+            if (ImGui.BeginCombo("Logo visibility override",
                 GetVisibilityOverrideSettingString(_configuration.VisibilityOverride)))
             {
                 if (ImGui.Selectable(GetVisibilityOverrideSettingString(OverrideSetting.Override)))
@@ -883,18 +896,18 @@ namespace TitleEdit
             bool debugLogging = _configuration.DebugLogging;
             if (ImGui.Checkbox("Enable debug logging", ref debugLogging))
                 _configuration.DebugLogging = debugLogging;
-            
+
             // bool displayVersion = _configuration.DisplayVersionText;
             // if (ImGui.Checkbox("Show FFXIV version text on title screen", ref displayVersion))
             // {
-                // _configuration.DisplayVersionText = displayVersion;
-                // _titleEdit.SetRevisionStringVisibility(displayVersion);
+            // _configuration.DisplayVersionText = displayVersion;
+            // _titleEdit.SetRevisionStringVisibility(displayVersion);
             // }
-            
+
             bool displayToast = _configuration.DisplayTitleToast;
             if (ImGui.Checkbox("Display the name of the current screen when loaded", ref displayToast))
                 _configuration.DisplayTitleToast = displayToast;
-            
+
             ImGui.EndChild();
 
             if (!canSave)
@@ -905,6 +918,7 @@ namespace TitleEdit
                 {
                     UpdateConfig();
                     _configuration.Save();
+                    _titleEdit.RefreshCurrentTitleEditScreen();
                 }
 
                 ImGui.SameLine();
@@ -913,6 +927,7 @@ namespace TitleEdit
                     UpdateConfig();
                     _configuration.Save();
                     _isImguiTitleEditOpen = false;
+                    _titleEdit.RefreshCurrentTitleEditScreen();
                 }
             }
             ImGui.EndTabItem();
@@ -940,8 +955,9 @@ namespace TitleEdit
             ImGui.TextWrapped("TitleEdit presets are stored in the pluginConfigs/TitleEdit folder! " +
                               "If you are changing a file that is not there, it does not exist to TitleEdit!");
             ImGui.TextWrapped("TitleEdit reserves the TE_ suffix on new titles to avoid overwriting player presets.");
-            ImGui.TextWrapped("Accessing the lobby, then going back to the title screen will re-load " +
-                              "the title screen preset file, allowing for fast iteration on presets.");
+            ImGui.TextWrapped("Accessing the lobby or a cinematic, then going back to the title screen will re-load " +
+                              "the title screen preset file, allowing for fast iteration on presets. " +
+                              " The re-load itself happens when you leave the title screen.");
 
             ImGui.TextColored(new Vector4(0, 1, 0, 1), "Known issues");
             ImGui.TextWrapped("- The sun and moon do not exist on title screens.");
@@ -955,10 +971,11 @@ namespace TitleEdit
         {
             if (!ImGui.BeginTabItem("Credits"))
                 return;
-            ImGui.Text("attick - Title Edit 1.0 and many functions of 2.0");
-            ImGui.Text("perchbird - Custom title screens and supporting features");
-            ImGui.Text("ff-meli - BGM now playing code");
-            ImGui.Text("goat - being a caprine individual");
+            ImGui.TextWrapped("attick - Title Edit 1.0 and many functions of 2.0");
+            ImGui.TextWrapped("perchbird - Custom title screens and supporting features, maintaining the plugin before Dawntrail");
+            ImGui.TextWrapped("Speedas - Dawntrail update");
+            ImGui.TextWrapped("ff-meli - BGM now playing code");
+            ImGui.TextWrapped("goat - being a caprine individual");
             ImGui.EndTabItem();
         }
 
@@ -978,7 +995,7 @@ namespace TitleEdit
                 _ => throw new ArgumentOutOfRangeException()
             };
         }
-        
+
         private string GetVisibilityOverrideSettingString(OverrideSetting setting)
         {
             return setting switch
@@ -1009,6 +1026,7 @@ namespace TitleEdit
         {
             _titleEdit?.Dispose();
             DalamudApi.CommandManager.RemoveHandler(TitleEditCommand);
+            logoTexture?.Dispose();
         }
     }
 }

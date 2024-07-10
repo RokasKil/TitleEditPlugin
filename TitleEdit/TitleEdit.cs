@@ -1,3 +1,8 @@
+using Dalamud.Hooking;
+using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Component.GUI;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -7,16 +12,14 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Dalamud.Hooking;
-using Dalamud.Interface.Internal.Notifications;
-using FFXIVClientStructs.FFXIV.Component.GUI;
-using Newtonsoft.Json;
 
 namespace TitleEdit;
 
 public class TitleEdit
 {
     private delegate int OnCreateScene(string p1, uint p2, IntPtr p3, uint p4, IntPtr p5, int p6, uint p7);
+    private delegate void OnLoadScene(ulong p1, uint p2, string path, int p4,
+               uint p5, ulong p6, uint p7);
     private delegate IntPtr OnFixOn(IntPtr self,
         [MarshalAs(UnmanagedType.LPArray, SizeConst = 3)]
         float[] cameraPos,
@@ -26,23 +29,27 @@ public class TitleEdit
     private delegate IntPtr OnPlayMusic(IntPtr self, string filename, float volume, uint fadeTime);
     private delegate void SetTimePrototype(ushort timeOffset);
     private delegate byte LobbyUpdate(GameLobbyType mapId, int time);
+    private delegate void LoadLobbyScene(GameLobbyType mapId);
+    private delegate ulong PlayMovie(int movieId, int p2);
 
     // The size of the BGMControl object
-    private const int ControlSize = 88;
+    private const int ControlSize = 96;
     private readonly TitleEditConfiguration _configuration;
 
     private readonly Hook<OnCreateScene> _createSceneHook;
     private readonly Hook<OnPlayMusic> _playMusicHook;
     private readonly Hook<OnFixOn> _fixOnHook;
     private readonly Hook<OnLoadLogoResource> _loadLogoResourceHook;
-    private readonly Hook<LobbyUpdate> _lobbyUpdateHook;
+    private readonly Hook<LoadLobbyScene> _loadLobbySceneHook;
+    private readonly Hook<PlayMovie> _playMovieHook;
     private readonly SetTimePrototype _setTime;
 
     private readonly string _titleScreenBasePath;
     private bool _titleCameraNeedsSet;
     private bool _amForcingTime;
     private bool _amForcingWeather;
-    private GameLobbyType _lastLobbyUpdateMapId = GameLobbyType.Movie;
+    private bool _loadingTitleMenuScene;
+    private bool _loadingCharaSelectScene;
 
     private TitleEditScreen _currentScreen;
 
@@ -74,36 +81,58 @@ public class TitleEdit
         _fixOnHook = DalamudApi.Hooks.HookFromAddress<OnFixOn>(TitleEditAddressResolver.FixOn, HandleFixOn);
         _loadLogoResourceHook =
             DalamudApi.Hooks.HookFromAddress<OnLoadLogoResource>(TitleEditAddressResolver.LoadLogoResource, HandleLoadLogoResource);
-        _lobbyUpdateHook = DalamudApi.Hooks.HookFromAddress<LobbyUpdate>(TitleEditAddressResolver.LobbyUpdate, LobbyUpdateDetour);
+        _loadLobbySceneHook =
+            DalamudApi.Hooks.HookFromAddress<LoadLobbyScene>(TitleEditAddressResolver.LoadLobbyScene, HandleLoadLobby);
+        _playMovieHook = DalamudApi.Hooks.HookFromAddress<PlayMovie>(TitleEditAddressResolver.PlayMovie, HandlePlayMovie);
 
         _setTime = Marshal.GetDelegateForFunctionPointer<SetTimePrototype>(TitleEditAddressResolver.SetTime);
+        DalamudApi.Framework.Update += Tick;
         DalamudApi.PluginLog.Info("TitleEdit hook init finished");
+        RefreshCurrentTitleEditScreen();
     }
-    
-    private byte LobbyUpdateDetour(GameLobbyType mapId, int time)
-    {
-        _lastLobbyUpdateMapId = mapId;
-        var gameTitleScreen = TitleEditAddressResolver.GetGameExpectedTitleScreen(); // this is expac title, not GameLobbyType
-        var currentMap = (GameLobbyType)TitleEditAddressResolver.CurrentLobbyMap;
 
-        var isARRTitleScreen = gameTitleScreen == 0;
-        var isTitleScreenToLobby = currentMap == GameLobbyType.Title && mapId == GameLobbyType.CharaSelect;
-        var isLobbyToTitleScreen = currentMap == GameLobbyType.CharaSelect && mapId == GameLobbyType.Title;
-        var shouldApply = isARRTitleScreen && (isTitleScreenToLobby || isLobbyToTitleScreen);
-        
-        DalamudApi.PluginLog.Verbose($"[LobbyUpdateDetour] map {mapId} time {time} currentMap {currentMap} " +
-                                   $"gameTitleScreen {gameTitleScreen} isARRTitleScreen {isARRTitleScreen} " +
-                                   $"isTitleScreenToLobby {isTitleScreenToLobby} isLobbyToTitleScreen {isLobbyToTitleScreen} " +
-                                   $"shouldApply {shouldApply}");
-        
-        if (shouldApply)
+    private ulong HandlePlayMovie(int movieId, int p2)
+    {
+        StopForcing();
+        RefreshCurrentTitleEditScreen();
+        return _playMovieHook.Original(movieId, p2);
+    }
+
+    private void HandleLoadLobby(GameLobbyType mapId)
+    {
+        StopForcing();
+        if (mapId == GameLobbyType.Title && _currentScreen.TitleOverride == null)
         {
-            DalamudApi.PluginLog.Debug($"[LobbyUpdateDetour] Running!");
-            // This tells the game it was playing a movie so it skips the "same zone" check entirely
-            TitleEditAddressResolver.CurrentLobbyMap = (short)GameLobbyType.Movie;
+            _loadingTitleMenuScene = true;
         }
-        
-        return _lobbyUpdateHook.Original(mapId, time);
+        else if (mapId == GameLobbyType.CharaSelect)
+        {
+
+            RefreshCurrentTitleEditScreen();
+            _loadingCharaSelectScene = true;
+        }
+        _loadLobbySceneHook.Original(mapId);
+    }
+
+    // The Dawntrail title screen is actually a cutscene unlike all the other ones and messes with everything
+    // So if we detect that dawntrail is selected we unset it
+    private void Tick(IFramework framework)
+    {
+        if (_currentScreen?.TitleOverride != null)
+        {
+            TitleEditAddressResolver.CurrentTitleScreenType = _currentScreen.TitleOverride.Value;
+        }
+        else if (TitleEditAddressResolver.CurrentTitleScreenType == TitleScreenExpansion.Dawntrail)
+        {
+            TitleEditAddressResolver.CurrentTitleScreenType = TitleScreenExpansion.Endwalker;
+        }
+    }
+
+    private void StopForcing()
+    {
+        _amForcingTime = false;
+        _amForcingWeather = false;
+        _titleCameraNeedsSet = false;
     }
 
     internal void RefreshCurrentTitleEditScreen()
@@ -127,7 +156,7 @@ public class TitleEdit
             else
             {
                 // The custom title list was somehow empty
-                toLoad = "Endwalker";
+                toLoad = "Dawntrail";
             }
         }
 
@@ -151,21 +180,31 @@ public class TitleEdit
         }
 
         Log($"Title Edit loaded {path}");
+    }
 
+    private void DisplayLoadedTitleScreen()
+    {
         if (_configuration.DisplayTitleToast)
         {
             Task.Delay(2000).ContinueWith(_ =>
             {
                 if (GetState("_TitleMenu") == UiState.Visible)
-                    DalamudApi.PluginInterface.UiBuilder.AddNotification($"Now displaying: {_currentScreen.Name}", "Title Edit", NotificationType.Info);
+                {
+                    DalamudApi.NotificationManager.AddNotification(new()
+                    {
+                        Content = $"Now displaying: {_currentScreen.Name}",
+                        Title = "Title Edit",
+                        Type = NotificationType.Info
+                    });
+                }
             });
         }
     }
 
     private bool IsScreenValid(TitleEditScreen screen)
     {
-        return DalamudApi.DataManager.FileExists($"bg/{screen.TerritoryPath}.lvb") &&
-               DalamudApi.DataManager.FileExists(screen.BgmPath);
+        return screen.TitleOverride != null ||
+            (DalamudApi.DataManager.FileExists($"bg/{screen.TerritoryPath}.lvb") && DalamudApi.DataManager.FileExists(screen.BgmPath));
     }
 
     private void Fail()
@@ -181,22 +220,20 @@ public class TitleEdit
     private int HandleCreateScene(string p1, uint p2, IntPtr p3, uint p4, IntPtr p5, int p6, uint p7)
     {
         Log($"HandleCreateScene {p1} {p2} {p3.ToInt64():X} {p4} {p5.ToInt64():X} {p6} {p7}");
-        _titleCameraNeedsSet = false;
-        _amForcingTime = false;
-        _amForcingWeather = false;
-
-        if (_lastLobbyUpdateMapId == GameLobbyType.CharaSelect)
+        if (_loadingCharaSelectScene)
         {
+            _loadingCharaSelectScene = false;
             Log("Loading lobby and lobby fixon.");
             var returnVal = _createSceneHook.Original(p1, p2, p3, p4, p5, p6, p7);
             FixOn(new Vector3(0, 0, 0), new Vector3(0, 0.8580103f, 0), 1);
             return returnVal;
         }
 
-        if (_lastLobbyUpdateMapId == GameLobbyType.Title)
+        if (_loadingTitleMenuScene)
         {
+            _loadingTitleMenuScene = false;
+            DisplayLoadedTitleScreen();
             Log("Loading custom title.");
-            RefreshCurrentTitleEditScreen();
             p1 = _currentScreen.TerritoryPath;
             Log($"Title zone: {p1}");
             var returnVal = _createSceneHook.Original(p1, p2, p3, p4, p5, p6, p7);
@@ -213,7 +250,7 @@ public class TitleEdit
     private IntPtr HandlePlayMusic(IntPtr self, string filename, float volume, uint fadeTime)
     {
         Log($"HandlePlayMusic {self.ToInt64():X} {filename} {volume} {fadeTime}");
-        if (filename.EndsWith("_System_Title.scd") && _currentScreen != null)
+        if (filename.EndsWith("_System_Title.scd") && _currentScreen != null && _currentScreen.TitleOverride == null)
             filename = _currentScreen.BgmPath;
         return _playMusicHook.Original(self, filename, volume, fadeTime);
     }
@@ -267,7 +304,6 @@ public class TitleEdit
 
         if (visOver == OverrideSetting.UseIfUnspecified && _currentScreen.Logo != "Unspecified")
             display = _currentScreen.DisplayLogo;
-
         switch (logo)
         {
             case "A Realm Reborn":
@@ -291,8 +327,11 @@ public class TitleEdit
             case "Endwalker":
                 result = _loadLogoResourceHook.Original(p1, "Title_Logo600", p3, p4);
                 break;
+            case "Dawntrail":
+                result = _loadLogoResourceHook.Original(p1, "Title_Logo700", p3, p4);
+                break;
             default:
-                result = _loadLogoResourceHook.Original(p1, "Title_Logo600", p3, p4);
+                result = _loadLogoResourceHook.Original(p1, "Title_Logo700", p3, p4);
                 break;
         }
 
@@ -301,9 +340,29 @@ public class TitleEdit
         // var delay = 2001;
         // if (logo == "Endwalker")
         //     delay = 10600;
+
+        // Dawntrail title menu is a cutscene which somehow triggers the logo animation
+        // So we do it manually
+        // Maybe delay this to emulate the actual dawntrial screen
+        if (logo == "Dawntrail" && _currentScreen.TitleOverride != TitleScreenExpansion.Dawntrail)
+            AnimateDawntrailLogo();
+
         if (!display)
             DisableTitleLogo();
         return result;
+    }
+
+    private unsafe void AnimateDawntrailLogo()
+    {
+        DalamudApi.Framework.RunOnTick(() =>
+        {
+            var addon = (AtkUnitBase*)DalamudApi.GameGui.GetAddonByName("_TitleLogo");
+            if (addon == null || addon->UldManager.NodeListCount < 2) return;
+            var node = addon->UldManager.NodeList[0];
+            if (node == null) return;
+            Log("Animating dawntrail logo");
+            node->Timeline->PlayAnimation(AtkTimelineJumpBehavior.LoopForever, 0x65);
+        });
     }
 
     public void Enable()
@@ -312,7 +371,8 @@ public class TitleEdit
         _createSceneHook.Enable();
         _playMusicHook.Enable();
         _fixOnHook.Enable();
-        _lobbyUpdateHook.Enable();
+        _loadLobbySceneHook.Enable();
+        _playMovieHook.Enable();
     }
 
     public void Dispose()
@@ -323,7 +383,8 @@ public class TitleEdit
         _createSceneHook.Dispose();
         _playMusicHook.Dispose();
         _fixOnHook.Dispose();
-        _lobbyUpdateHook.Dispose();
+        _loadLobbySceneHook.Dispose();
+        _playMovieHook.Dispose();
     }
 
     private void ForceTime(ushort timeOffset, int forceTime)
@@ -338,7 +399,7 @@ public class TitleEdit
                 {
                     if (!_amForcingTime)
                         break;
-                    
+
                     if (TitleEditAddressResolver.SetTime != IntPtr.Zero)
                         _setTime(timeOffset);
                     Thread.Sleep(50);
@@ -365,7 +426,7 @@ public class TitleEdit
                 {
                     if (!_amForcingWeather)
                         break;
-                    
+
                     SetWeather(weather);
                     Thread.Sleep(20);
                 } while (stop.ElapsedMilliseconds < forceTime && _amForcingWeather);

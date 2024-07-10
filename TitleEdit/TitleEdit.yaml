@@ -1,5 +1,5 @@
 ﻿name: Title Edit
-author: attick & perchbird
+author: attick, perchbird & Speedas
 load_required_state: 2
 load_priority: 10
 load_sync: true
@@ -9,3 +9,5 @@ description: |-
   use title screens that others have shared!
 punchline: Create, share, and shuffle custom title screens for FFXIV.
 repo_url: https://github.com/lmcintyre/TitleEditPlugin
+tags:
+  - UI

@@ -1,3 +1,6 @@
+using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Graphics.Environment;
 using System;
 using System.Runtime.InteropServices;
 
@@ -5,20 +8,13 @@ namespace TitleEdit
 {
     public static class TitleEditAddressResolver
     {
-        private static IntPtr CameraBase { get; set; }
-        
-        public static IntPtr RenderCamera
-        {
-            get
-            {
-                var base2 = Marshal.ReadIntPtr(CameraBase);
-                return base2 == IntPtr.Zero ? IntPtr.Zero : Marshal.ReadIntPtr(base2, 240);
-            }
-        }
+        private static unsafe IntPtr CameraBase => (IntPtr)CameraManager.Instance();
+
+        public static unsafe Camera* RenderCamera => CameraManager.Instance()->Camera;
 
         public static IntPtr LobbyCamera => CameraBase == IntPtr.Zero ? IntPtr.Zero : Marshal.ReadIntPtr(CameraBase, 16);
 
-        public static IntPtr WeatherPtr => Marshal.ReadIntPtr(WeatherPtrBase) + 0x27;
+        public static unsafe IntPtr WeatherPtr => ((IntPtr)EnvManager.Instance()) + 0x27;
 
         public static IntPtr LoadLogoResource { get; private set; }
         public static IntPtr SetTime { get; private set; }
@@ -26,38 +22,28 @@ namespace TitleEdit
         public static IntPtr FixOn { get; private set; }
         public static IntPtr PlayMusic { get; private set; }
         public static IntPtr BgmControl { get; private set; }
-        public static IntPtr WeatherPtrBase { get; private set; }
-        public static IntPtr LobbyUpdate { get; private set; }
-        public static IntPtr LobbyCurrentMap { get; private set; }
         public static IntPtr LobbyThing { get; private set; }
+        public static IntPtr LoadLobbyScene { get; private set; }
+        public static IntPtr PlayMovie { get; private set; }
 
-        public static void Setup64Bit()
+        public static unsafe void Setup64Bit()
         {
-            LoadLogoResource = DalamudApi.SigScanner.ScanText("48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC 20 41 8B F9 41 0F B6 F0 48 8B D9 48 85 D2 75 12");
-            CameraBase = DalamudApi.SigScanner.GetStaticAddressFromSig("4C 8D 35 ?? ?? ?? ?? 85 D2");
-            SetTime = DalamudApi.SigScanner.ScanText("40 53 48 83 EC 20 44 0F BF C1 B8 ?? ?? ?? ?? 41 F7 E8 66 89 0D ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? C1 FA 05 8B C2 C1 E8 1F 03 D0");
+            LoadLogoResource = DalamudApi.SigScanner.ScanText("48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 41 8B F1 41 0F B6 F8");
+            SetTime = DalamudApi.SigScanner.ScanText("40 53 48 83 EC ?? 44 0F BF C1");
             CreateScene = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? 66 89 1D ?? ?? ?? ?? E9 ?? ?? ?? ??");
             FixOn = DalamudApi.SigScanner.ScanText("C6 81 ?? ?? ?? ?? ?? 8B 02 89 41 60");
             PlayMusic = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? 48 89 47 18 89 5F 20");
-            BgmControl = DalamudApi.SigScanner.GetStaticAddressFromSig("48 8B 05 ?? ?? ?? ?? 48 85 C0 74 37 83 78 08 04");
-            WeatherPtrBase = DalamudApi.SigScanner.GetStaticAddressFromSig("48 8B 05 ?? ?? ?? ?? 48 8B D9 0F 29 7C 24 ?? 41 8B FF");
-            LobbyUpdate = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? EB 1C 3B CF");
-            LobbyCurrentMap = DalamudApi.SigScanner.GetStaticAddressFromSig("0F B7 05 ?? ?? ?? ?? 49 8B CE");
-            LobbyThing = DalamudApi.SigScanner.GetStaticAddressFromSig("48 8B 0D ?? ?? ?? ?? 8B 51 38 2B D3");
+            BgmControl = DalamudApi.SigScanner.GetStaticAddressFromSig("48 8B 1D ?? ?? ?? ?? 8B F1");
+            LobbyThing = DalamudApi.SigScanner.GetStaticAddressFromSig("66 0F 7F 05 ?? ?? ?? ?? 4C 89 35");
+            LoadLobbyScene = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? B0 ?? 88 86");
+            PlayMovie = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? 48 8B 7C 24 ?? 48 89 43 ?? C7 43");
         }
 
-        public static int GetGameExpectedTitleScreen()
+        public static TitleScreenExpansion CurrentTitleScreenType
         {
-            unsafe
-            {
-                return *(int*) (*((nint*)LobbyThing) + 56);
-            }
+            get => (TitleScreenExpansion)Marshal.ReadInt32(LobbyThing, 0x34);
+            set => Marshal.WriteInt32(LobbyThing, 0x34, (int)value);
         }
 
-        public static short CurrentLobbyMap
-        {
-            get => Marshal.ReadInt16(LobbyCurrentMap);
-            set => Marshal.WriteInt16(LobbyCurrentMap, value);
-        }
     }
 }

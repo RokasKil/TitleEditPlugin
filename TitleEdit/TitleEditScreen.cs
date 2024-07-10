@@ -14,5 +14,6 @@ namespace TitleEdit
         public byte WeatherId;
         public ushort TimeOffset;
         public string BgmPath;
+        public TitleScreenExpansion? TitleOverride;
     }
 }
