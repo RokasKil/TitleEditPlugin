@@ -1,0 +1,21 @@
+{
+  "Name": "Wachunpelo day",
+  "Logo": "Dawntrail",
+  "DisplayLogo": true,
+  "TerritoryPath": "ex5/02_ykt_y6/fld/y6f1/level/y6f1",
+  "CameraPos": {
+    "X": 355.44955,
+    "Y": -158.5421,
+    "Z": -447.30014
+  },
+  "FixOnPos": {
+    "X": 350.04,
+    "Y": -153.3619,
+    "Z": -440.67416
+  },
+  "FovY": 1.0,
+  "WeatherId": 2,
+  "TimeOffset": 900,
+  "BgmPath": "music/ex5/BGM_EX5_Field_Urq_Day.scd",
+  "TitleOverride": null
+}
