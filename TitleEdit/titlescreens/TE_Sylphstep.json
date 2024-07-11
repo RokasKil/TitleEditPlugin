@@ -1,0 +1,20 @@
+{
+  "Name": "sylphstep",
+  "Logo": "Endwalker",
+  "DisplayLogo": true,
+  "TerritoryPath": "ffxiv/fst_f1/evt/f1eb/level/f1eb",
+  "CameraPos": {
+    "X": 1.8103296,
+    "Y": 87.19157,
+    "Z": -152.0703
+  },
+  "FixOnPos": {
+    "X": 1.5733395,
+    "Y": 85.704475,
+    "Z": -161.95627
+  },
+  "FovY": 1.0,
+  "WeatherId": 2,
+  "TimeOffset": 1200,
+  "BgmPath": "music/ffxiv/BGM_GlodSaucer_GATE.scd"
+}

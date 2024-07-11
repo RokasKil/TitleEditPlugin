@@ -1,0 +1,21 @@
+{
+  "Name": "Tuli night",
+  "Logo": "Dawntrail",
+  "DisplayLogo": true,
+  "TerritoryPath": "ex5/02_ykt_y6/twn/y6t1/level/y6t1",
+  "CameraPos": {
+    "X": 130.34209,
+    "Y": -16.301905,
+    "Z": 172.8012
+  },
+  "FixOnPos": {
+    "X": 56.56981,
+    "Y": 2.1950378,
+    "Z": 70.55983
+  },
+  "FovY": 1.0,
+  "WeatherId": 1,
+  "TimeOffset": 2200,
+  "BgmPath": "music/ex5/BGM_EX5_Town_T_Night.scd",
+  "TitleOverride": null
+}

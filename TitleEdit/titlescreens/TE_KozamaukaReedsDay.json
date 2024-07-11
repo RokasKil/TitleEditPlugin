@@ -1,0 +1,21 @@
+{
+  "Name": "Kozama'uka reeds day",
+  "Logo": "Dawntrail",
+  "DisplayLogo": true,
+  "TerritoryPath": "ex5/02_ykt_y6/fld/y6f2/level/y6f2",
+  "CameraPos": {
+    "X": 78.59883,
+    "Y": 5.5294,
+    "Z": -410.7169
+  },
+  "FixOnPos": {
+    "X": 84.19408,
+    "Y": 7.772108,
+    "Z": -402.73807
+  },
+  "FovY": 1.0,
+  "WeatherId": 2,
+  "TimeOffset": 900,
+  "BgmPath": "music/ex5/BGM_EX5_Field_Koz_Night.scd",
+  "TitleOverride": null
+}
