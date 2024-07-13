@@ -1,0 +1,21 @@
+{
+  "Name": "TE_Kozama'uka - Midday",
+  "Logo": "Dawntrail",
+  "DisplayLogo": true,
+  "TerritoryPath": "ex5/02_ykt_y6/fld/y6f2/level/y6f2",
+  "CameraPos": {
+    "X": -508.61078,
+    "Y": 65.44885,
+    "Z": -416.0996
+  },
+  "FixOnPos": {
+    "X": -499.5547,
+    "Y": 66.40764,
+    "Z": -411.96844
+  },
+  "FovY": 1.08,
+  "WeatherId": 2,
+  "TimeOffset": 1100,
+  "BgmPath": "music/ex5/BGM_EX5_Field_Safe02.scd",
+  "TitleOverride": null
+}
