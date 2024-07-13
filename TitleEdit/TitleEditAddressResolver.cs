@@ -8,11 +8,9 @@ namespace TitleEdit
 {
     public static class TitleEditAddressResolver
     {
-        private static unsafe IntPtr CameraBase => (IntPtr)CameraManager.Instance();
-
         public static unsafe Camera* RenderCamera => CameraManager.Instance()->Camera;
 
-        public static IntPtr LobbyCamera => CameraBase == IntPtr.Zero ? IntPtr.Zero : Marshal.ReadIntPtr(CameraBase, 16);
+        public static unsafe LobbyCamera* LobbyCamera => CameraManager.Instance()->LobbCamera;
 
         public static unsafe IntPtr WeatherPtr => ((IntPtr)EnvManager.Instance()) + 0x27;
 
@@ -25,6 +23,9 @@ namespace TitleEdit
         public static IntPtr LobbyThing { get; private set; }
         public static IntPtr LoadLobbyScene { get; private set; }
         public static IntPtr PlayMovie { get; private set; }
+        public static IntPtr DawntrailCutsceneStruct { get; private set; }
+        public static IntPtr SetActiveCamera { get; private set; }
+        public static IntPtr CurrentLobbyTypeAddress { get; private set; }
 
         public static unsafe void Setup64Bit()
         {
@@ -37,12 +38,28 @@ namespace TitleEdit
             LobbyThing = DalamudApi.SigScanner.GetStaticAddressFromSig("66 0F 7F 05 ?? ?? ?? ?? 4C 89 35");
             LoadLobbyScene = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? B0 ?? 88 86");
             PlayMovie = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? 48 8B 7C 24 ?? 48 89 43 ?? C7 43");
+            DawntrailCutsceneStruct = DalamudApi.SigScanner.GetStaticAddressFromSig("48 8D 05 ?? ?? ?? ?? 48 83 C4 ?? C3 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 83 3D ?? ?? ?? ?? ?? 75 ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? C7 05");
+            SetActiveCamera = DalamudApi.SigScanner.ScanText("E8 ?? ?? ?? ?? 48 83 BF ?? ?? ?? ?? ?? 48 C7 87");
+            CurrentLobbyTypeAddress = DalamudApi.SigScanner.GetStaticAddressFromSig("0F B7 05 ?? ?? ?? ?? 48 8B CE");
         }
 
         public static TitleScreenExpansion CurrentTitleScreenType
         {
             get => (TitleScreenExpansion)Marshal.ReadInt32(LobbyThing, 0x34);
             set => Marshal.WriteInt32(LobbyThing, 0x34, (int)value);
+        }
+
+        public static bool PlayingDawntrailCutscene
+        {
+            get => Marshal.ReadInt32(DawntrailCutsceneStruct, 0xa0) == 1;
+            set => Marshal.WriteInt32(DawntrailCutsceneStruct, 0xa0, value ? 1 : 2);
+        }
+
+
+        public static GameLobbyType CurrentLobbyType
+        {
+            get => (GameLobbyType)Marshal.ReadInt32(CurrentLobbyTypeAddress);
+            set => Marshal.WriteInt32(CurrentLobbyTypeAddress, (int)value);
         }
 
     }

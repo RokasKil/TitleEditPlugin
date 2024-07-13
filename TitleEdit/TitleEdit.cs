@@ -1,6 +1,9 @@
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Hooking;
 using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Newtonsoft.Json;
 using System;
@@ -31,6 +34,7 @@ public class TitleEdit
     private delegate byte LobbyUpdate(GameLobbyType mapId, int time);
     private delegate void LoadLobbyScene(GameLobbyType mapId);
     private delegate ulong PlayMovie(int movieId, int p2);
+    private unsafe delegate void SetActiveCameraPrototype(CameraManager* manager, int index);
 
     // The size of the BGMControl object
     private const int ControlSize = 96;
@@ -43,6 +47,7 @@ public class TitleEdit
     private readonly Hook<LoadLobbyScene> _loadLobbySceneHook;
     private readonly Hook<PlayMovie> _playMovieHook;
     private readonly SetTimePrototype _setTime;
+    private readonly SetActiveCameraPrototype _setActiveCamera;
 
     private readonly string _titleScreenBasePath;
     private bool _titleCameraNeedsSet;
@@ -50,8 +55,12 @@ public class TitleEdit
     private bool _amForcingWeather;
     private bool _loadingTitleMenuScene;
     private bool _loadingCharaSelectScene;
+    private bool _shouldAnimateDawntrailLogo;
 
     private TitleEditScreen _currentScreen;
+
+    private TitleEditScreen _lastLoadedScreen;
+
 
     // Hardcoded fallback info now that jank is resolved
     private static TitleEditScreen ARealmReborn => new()
@@ -86,9 +95,29 @@ public class TitleEdit
         _playMovieHook = DalamudApi.Hooks.HookFromAddress<PlayMovie>(TitleEditAddressResolver.PlayMovie, HandlePlayMovie);
 
         _setTime = Marshal.GetDelegateForFunctionPointer<SetTimePrototype>(TitleEditAddressResolver.SetTime);
+        _setActiveCamera = Marshal.GetDelegateForFunctionPointer<SetActiveCameraPrototype>(TitleEditAddressResolver.SetActiveCamera);
+
         DalamudApi.Framework.Update += Tick;
+        DalamudApi.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "_TitleLogo", PostTitleLogoSetup);
         DalamudApi.PluginLog.Info("TitleEdit hook init finished");
         RefreshCurrentTitleEditScreen();
+
+    }
+
+    private unsafe void ResetActiveCamera()
+    {
+        _setActiveCamera(CameraManager.Instance(), 0);
+    }
+
+    private void PostTitleLogoSetup(AddonEvent type, AddonArgs args)
+    {
+        Log("_TitleLogo setup");
+        if (_shouldAnimateDawntrailLogo)
+        {
+            _shouldAnimateDawntrailLogo = false;
+            AnimateDawntrailLogo();
+        }
+
     }
 
     private ulong HandlePlayMovie(int movieId, int p2)
@@ -101,23 +130,29 @@ public class TitleEdit
     private void HandleLoadLobby(GameLobbyType mapId)
     {
         StopForcing();
+        if (TitleEditAddressResolver.PlayingDawntrailCutscene)
+        {
+            Log("Game still playing cutscene when loading lobby level, stopping it");
+            //This will clean up some data but the camera switch is delayed so we do that manually
+            TitleEditAddressResolver.PlayingDawntrailCutscene = false;
+            ResetActiveCamera();
+        }
         if (mapId == GameLobbyType.Title && _currentScreen.TitleOverride == null)
         {
             _loadingTitleMenuScene = true;
         }
         else if (mapId == GameLobbyType.CharaSelect)
         {
-
             RefreshCurrentTitleEditScreen();
             _loadingCharaSelectScene = true;
         }
         _loadLobbySceneHook.Original(mapId);
     }
 
-    // The Dawntrail title screen is actually a cutscene unlike all the other ones and messes with everything
-    // So if we detect that dawntrail is selected we unset it
     private void Tick(IFramework framework)
     {
+        // The Dawntrail title screen is actually a cutscene unlike all the other ones and messes with everything
+        // So if we detect that dawntrail is selected we unset it
         if (_currentScreen?.TitleOverride != null)
         {
             TitleEditAddressResolver.CurrentTitleScreenType = _currentScreen.TitleOverride.Value;
@@ -125,6 +160,23 @@ public class TitleEdit
         else if (TitleEditAddressResolver.CurrentTitleScreenType == TitleScreenExpansion.Dawntrail)
         {
             TitleEditAddressResolver.CurrentTitleScreenType = TitleScreenExpansion.Endwalker;
+        }
+
+        // Manually closing the dawntrail cutscene (which rarely needs to be done) sometimes sets the camera position out of bounds
+        // So we just brute force it by setting it every frame 
+        if (TitleEditAddressResolver.CurrentLobbyType == GameLobbyType.Title && _lastLoadedScreen != null)
+        {
+            FixOn(_lastLoadedScreen.CameraPos, _lastLoadedScreen.FixOnPos, _lastLoadedScreen.FovY);
+        }
+        else if (TitleEditAddressResolver.CurrentLobbyType == GameLobbyType.CharaSelect)
+        {
+            unsafe
+            {
+                if (TitleEditAddressResolver.LobbyCamera != null)
+                {
+                    TitleEditAddressResolver.LobbyCamera->Camera.CameraBase.SceneCamera.LookAtVector = new Vector3(0, TitleEditAddressResolver.LobbyCamera->Camera.CameraBase.SceneCamera.LookAtVector.Y, 0);
+                }
+            }
         }
     }
 
@@ -232,12 +284,12 @@ public class TitleEdit
         if (_loadingTitleMenuScene)
         {
             _loadingTitleMenuScene = false;
+            _lastLoadedScreen = _currentScreen;
             DisplayLoadedTitleScreen();
             Log("Loading custom title.");
             p1 = _currentScreen.TerritoryPath;
             Log($"Title zone: {p1}");
             var returnVal = _createSceneHook.Original(p1, p2, p3, p4, p5, p6, p7);
-            _titleCameraNeedsSet = true;
             ForceWeather(_currentScreen.WeatherId, 5000);
             ForceTime(_currentScreen.TimeOffset, 5000);
             // SetRevisionStringVisibility(_configuration.DisplayVersionText);
@@ -255,6 +307,7 @@ public class TitleEdit
         return _playMusicHook.Original(self, filename, volume, fadeTime);
     }
 
+    //Curently unused but I'll probably need this eventually
     private IntPtr HandleFixOn(IntPtr self,
         [MarshalAs(UnmanagedType.LPArray, SizeConst = 3)]
         float[] cameraPos,
@@ -276,13 +329,10 @@ public class TitleEdit
         // return _fixOnHook.Original(self, cameraPos, focusPos, fovY);
     }
 
-    public void FixOn(Vector3 cameraPos, Vector3 focusPos, float fov)
+    public unsafe void FixOn(Vector3 cameraPos, Vector3 focusPos, float fov)
     {
-        Log($"Fixing on {focusPos.X}, {focusPos.Y}, {focusPos.Z} " +
-            $"from {cameraPos.X}, {cameraPos.Y}, {cameraPos.Z} " +
-            $"with FOV {fov}");
-        if (TitleEditAddressResolver.LobbyCamera != IntPtr.Zero)
-            _fixOnHook.Original(TitleEditAddressResolver.LobbyCamera,
+        if (TitleEditAddressResolver.LobbyCamera != null)
+            _fixOnHook.Original((IntPtr)TitleEditAddressResolver.LobbyCamera,
                 FloatArrayFromVector3(cameraPos),
                 FloatArrayFromVector3(focusPos),
                 fov);
@@ -345,8 +395,7 @@ public class TitleEdit
         // So we do it manually
         // Maybe delay this to emulate the actual dawntrial screen
         if (logo == "Dawntrail" && _currentScreen.TitleOverride != TitleScreenExpansion.Dawntrail)
-            AnimateDawntrailLogo();
-
+            _shouldAnimateDawntrailLogo = true;
         if (!display)
             DisableTitleLogo();
         return result;
@@ -354,15 +403,12 @@ public class TitleEdit
 
     private unsafe void AnimateDawntrailLogo()
     {
-        DalamudApi.Framework.RunOnTick(() =>
-        {
-            var addon = (AtkUnitBase*)DalamudApi.GameGui.GetAddonByName("_TitleLogo");
-            if (addon == null || addon->UldManager.NodeListCount < 2) return;
-            var node = addon->UldManager.NodeList[0];
-            if (node == null) return;
-            Log("Animating dawntrail logo");
-            node->Timeline->PlayAnimation(AtkTimelineJumpBehavior.LoopForever, 0x65);
-        });
+        var addon = (AtkUnitBase*)DalamudApi.GameGui.GetAddonByName("_TitleLogo");
+        if (addon == null || addon->UldManager.NodeListCount < 2) return;
+        var node = addon->UldManager.NodeList[0];
+        if (node == null) return;
+        Log("Animating dawntrail logo");
+        node->Timeline->PlayAnimation(AtkTimelineJumpBehavior.LoopForever, 0x65);
     }
 
     public void Enable()
@@ -385,6 +431,8 @@ public class TitleEdit
         _fixOnHook.Dispose();
         _loadLobbySceneHook.Dispose();
         _playMovieHook.Dispose();
+        DalamudApi.Framework.Update -= Tick;
+        DalamudApi.AddonLifecycle.UnregisterListener(PostTitleLogoSetup);
     }
 
     private void ForceTime(ushort timeOffset, int forceTime)

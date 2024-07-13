@@ -960,7 +960,7 @@ namespace TitleEdit
                               " The re-load itself happens when you leave the title screen.");
 
             ImGui.TextColored(new Vector4(0, 1, 0, 1), "Known issues");
-            ImGui.TextWrapped("- The sun and moon do not exist on title screens.");
+            ImGui.TextWrapped("- After idling on the titlescreen for 60 seconds the game will play Endwalker cinematic instead of Dawntrail.");
             ImGui.TextWrapped("");
 
             ImGui.EndChild();

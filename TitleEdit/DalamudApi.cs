@@ -38,4 +38,5 @@ public class DalamudApi
     [PluginService] public static ITitleScreenMenu TitleScreenMenu { get; private set; } = null;
     [PluginService] public static INotificationManager NotificationManager { get; private set; } = null;
     [PluginService] public static ITextureProvider TextureProvider { get; private set; } = null;
+    [PluginService] public static IAddonLifecycle AddonLifecycle { get; private set; } = null;
 }
