@@ -302,7 +302,10 @@ public class TitleEdit
     private IntPtr HandlePlayMusic(IntPtr self, string filename, float volume, uint fadeTime)
     {
         Log($"HandlePlayMusic {self.ToInt64():X} {filename} {volume} {fadeTime}");
-        if (filename.EndsWith("_System_Title.scd") && _currentScreen != null && _currentScreen.TitleOverride == null)
+        if (filename.EndsWith("_System_Title.scd") &&
+            TitleEditAddressResolver.CurrentLobbyType == GameLobbyType.Title &&
+            _currentScreen != null &&
+            _currentScreen.TitleOverride == null)
             filename = _currentScreen.BgmPath;
         return _playMusicHook.Original(self, filename, volume, fadeTime);
     }
